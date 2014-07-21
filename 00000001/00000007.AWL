@@ -1,0 +1,29 @@
+DATA_BLOCK DB 123
+
+
+
+ STRUCT 	
+MotorPara1 : BOOL := FALSE ; //Comment 1
+MotorPara2 : BYTE := B#16#0 ; //Comment 2
+MotorPara3 : INT := 0 ; //Comment 3
+MotorPara4 : DINT := L#0 ; //Comment 4
+MotorPara5 : WORD := W#16#0 ; //Comment 5
+MotorPara6 : DWORD := DW#16#0 ; //Comment 6
+MotorPara7 : REAL := 0.000000e+000 ; //Comment 7
+MotorPara8 : TIME_OF_DAY := TOD#0:0:0.0 ; //Comment 8
+MotorPara9 : TIME := T#0MS ; //Comment 9
+Position1 : STRUCT 	//Position1
+xAxis : DINT := L#0 ; //xPos
+yAxis : DINT := L#0 ; //yPos
+zAxis : DINT := L#0 ; //zPos
+END_STRUCT ; 
+Position2 : STRUCT 	//Position2
+xAxis : DINT := L#0 ; //xPos
+yAxis : DINT := L#0 ; //yPos
+zAxis : DINT := L#0 ; //zPos
+END_STRUCT ; 
+END_STRUCT ; 
+BEGIN
+END_DATA_BLOCK  
+
+

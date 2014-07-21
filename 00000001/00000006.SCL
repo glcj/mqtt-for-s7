@@ -1,0 +1,61 @@
+
+FUNCTION_BLOCK FB203
+
+CONST
+    // Constants
+    SIZE := 9;
+END_CONST
+
+// Block Parameters
+VAR_INPUT
+    // Input Parameters
+    blnPeek : BOOL := FALSE;
+    blnPoke : BOOL := FALSE;
+END_VAR
+
+VAR_IN_OUT
+    // I/O Parameters   
+    anyData : UDT200;
+END_VAR
+
+VAR_OUTPUT
+    // Output Parameters
+    blnEmpty : BOOL := TRUE;
+
+END_VAR
+
+VAR_TEMP
+    // Temporary Variables
+
+END_VAR
+
+VAR
+    // Static Variables
+    intStar : INT := 0;
+    intEnd : INT := 0;
+    arrBuffer : ARRAY[0..SIZE] OF UDT200;
+END_VAR
+
+    IF (intStar <> intEnd) THEN 
+        blnEmpty := FALSE;        
+    ELSE
+        blnEmpty := TRUE;
+    END_IF;
+   
+    IF blnPeek AND NOT blnEmpty THEN
+        anyData := arrBuffer[intStar];
+        intStar := (intStar + 1) MOD SIZE;
+            ;
+    ELSE IF blnPoke THEN
+            arrBuffer[intEnd] := anyData;
+            intEnd := (intEnd + 1) MOD SIZE;
+            IF (intEnd = intStar) THEN
+                intStar := (intStar + 1) MOD SIZE;
+            END_IF;
+                ;
+        END_IF;
+    END_IF;
+        
+    // Statement Section
+    ;
+END_FUNCTION_BLOCK

@@ -1,0 +1,47 @@
+
+FUNCTION_BLOCK FBxxx
+
+// Block Parameters
+VAR_INPUT
+    // Input Parameters
+    REQ     :   BOOL;   //Control parameter request
+    R       :   BOOL;   //Control parameter reset: current job aborted
+    ID      :   WORD;   //Data channel for messages:W#16#EEEE ID is only evaluated at the first call.
+    AR_ID   :   DWORD;  //Archive number (0 not permitted) AR_ID is only evaluated at the first call.
+                        //Following this, each TIME SFB 37 is called with the corresponding instance
+                        //DB, the archive number from the first call is used.
+                        //STEP 7 assigns the message number automatically to ensure consistency of the
+                        //message numbers.  
+END_VAR
+
+VAR_IN_OUT
+    // I/O Parameters
+    SD_1    :   ANY;    //i-th associated value Only the following data types are permissible: 
+                        //BOOL (NOT allowed: bit field), BYTE, CHAR, WORD, INT, DWORD, DINT,
+                        //REAL, DATE, TOD, TIME, S5TIME, DATE_AND_TIME.
+                        //Note:
+                        //IF the ANY POINTER accesses an DB, the DB
+                        //must always be specified (FOR example: P#DB10.DBX5.0 Byte 10).
+    LEN     :   WORD;   //Length of the data field to be sent in bytes                        
+END_VAR
+
+VAR_OUTPUT
+    // Output Parameters
+    DONE    : BOOL;     //DONE status parameter: Generation of message completed
+    ERROR   : BOOL;     //ERROR status parameter ERROR=TRUE indicates that an error has
+                        //occurred during processing. FOR details refer to parameter STATUS.
+    STATUS  : WORD;     //STATUS parameter: Displays error information
+END_VAR
+
+VAR_TEMP
+    // Temporary Variables
+
+END_VAR
+VAR
+    // Static Variables
+
+END_VAR
+
+    // Statement Section
+    ;
+END_FUNCTION_BLOCK

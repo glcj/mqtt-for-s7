@@ -1,0 +1,10 @@
+(*
+/**
+* Compiler options
+*/
+*)
+
+{SCL_OverwriteBlocks := 'y' ; SCL_CreateDebugInfo := 'y'}
+{SCL_SetOKFlag := 'y' ; SCL_OptimizeObjectCode := 'y'}
+
+MQPOST

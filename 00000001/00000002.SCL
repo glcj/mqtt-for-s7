@@ -1,0 +1,1282 @@
+
+(*
+/**
+* Core block for MQTT protocol in S7.
+* 
+* @author César García
+* @param ID Is the ID of the connection take from NetPro
+* @param LADDR Hardware addres of the CP
+* @param blnCleanSession Bit 1 of the Connect flags byte. If not set (0), then the server
+* must store the subscriptions of the client after it disconnects. If set (1), then the 
+* server must discard any previously maintained information about the client and treat
+* the connection as "clean".
+* @param blnWill  Bit 2 of the Connect flags byte. The Will message defines that a
+* message is published on behalf of the client by the server when either an I/O error
+* is encountered by the server during communication with the client, or the client
+* fails to communicate within the Keep Alive timer schedule. Sending a Will message
+* is not triggered by the server receiving a DISCONNECT message from the client.
+* @param blnWillRetain Bit 5 of the Connect flags byte. The Will Retain flag indicates
+* whether the server should retain the Will message which is published by the server
+* on behalf of the client in the event that the client is disconnected unexpectedly.
+* @param blnUserName Bits 6 of the Connect flags byte.
+* @param blnPassword Bits 7 of the Connect flags byte.
+* @param blnPublishMessage Publish a message to predefined Topic
+* @param blnSubscribe if 
+* @param intSubTopicQos
+* @param intWillQos A connecting client specifies the QoS level in the Will QoS
+* field for a Will message that is sent in the event that the client is disconnected
+* involuntarily.
+* @param strClientIdentifier The first UTF-encoded string. The Client Identifier 
+* (Client ID) is between 1 and 23 characters long, and uniquely identifies the
+* client to the server. It must be unique across all clients connecting to a single
+* server, and is the key in handling Message IDs messages with QoS levels 1 and 2.
+* If the Client ID contains more than 23 characters, the server responds to the
+* CONNECT message with a CONNACK return code 2: Identifier Rejected.
+* @param strSubTopic
+* @param strWillTopic If the Will Flag is set, this is the next UTF-8 encoded string.
+* The Will Message is published to the Will Topic.
+* @param strWillMessage If the Will Flag is set, this is the next UTF-8 encoded string.
+* The Will Message defines the content of the message that is published to the 
+* Will Topic if the client is unexpectedly disconnected. This may be a zero-length message.
+* @param strUserName If the User Name flag is set, this is the next UTF-encoded string.
+* The user name identifies the name of the user who is connecting, which can be used for
+* authentication. It is recommended that user names are kept to 12 characters or
+* fewer, but it is not required.
+* @param strPassword If the Password flag is set, this is the next UTF-encoded string.
+* The password corresponding to the user who is connecting, which can be used for
+* authentication. It is recommended that passwords are kept to 12 characters or
+* fewer, but it is not required.
+* @param anyMqMessage Message payload.
+*
+* @param blnTxMessage The mq message was send.
+* @param blnRxMessage Received a mq message.
+* @param anyRxMessage Pointer to data, Is valid only one cicle.
+* 
+*/
+*)
+FUNCTION_BLOCK FB200
+
+TITLE = 'MQTT'
+//
+// MQTT Client implementation
+//
+VERSION: '1.0'
+AUTHOR: CGARCIA
+NAME: Name
+FAMILY: MQTT
+
+CONST
+    // Constants
+    NOTHING     :=  0; //Nothing
+    CONNECT     :=  1; //Client request to connect to Server
+    CONNACK     :=  2; //Connect Acknowledgment
+    PUBLISH     :=  3; //Publish message
+    PUBACK      :=  4; //Publish Acknowledgment
+    PUBREC      :=  5; //Publish Received (assured delivery part 1)
+    PUBREL      :=  6; //Publish Release (assured delivery part 2)
+    PUBCOMP     :=  7; //Publish Complete (assured delivery part 3)
+    SUBSCRIBE   :=  8; //Client Subscribe request
+    SUBACK      :=  9; //Subscribe Acknowledgment
+    UNSUBSCRIBE := 10; //Client Unsubscribe request
+    UNSUBACK    := 11; //Unsubscribe Acknowledgment
+    PINGREQ     := 12; //PING Request
+    PINGRESP    := 13; //PING Response
+    DISCONNECT  := 14; //Client is Disconnecting
+    RX_PUBLISH  := 103; //Received publish message
+    RX_PUBACK   := 104; //Acknoledge publish message
+        
+END_CONST
+
+
+// Block Parameters
+VAR_INPUT
+    // Input Parameters
+    ID : INT;
+    LADDR : WORD;
+    blnCleanSession : BOOL;
+    blnWill : BOOL;
+    blnWillRETAIN : BOOL;
+    blnUserName : BOOL;
+    blnPassword : BOOL;  
+    blnPublishMessage : BOOL;
+    blnSubscribe : BOOL;  
+    intSubTopicQos : INT;  
+    intWillQos : INT;
+    strClientIdentifier : ANY;
+    strSubTopic :ANY;
+    strWillTopic : ANY;
+    strWillMessage : ANY;    
+    strUserName : ANY;
+    strPassword : ANY;
+    anyMqMessage : UDT200;
+END_VAR
+
+VAR_IN_OUT
+    // I/O Parameters
+END_VAR
+
+VAR_OUTPUT
+    // Output Parameters
+    blnTxMessage : BOOL := FALSE;
+    blnRxMessage : BOOL := FALSE;
+    anyRxMessage : UDT200;
+
+END_VAR
+
+
+VAR_TEMP
+    // Temporary Variables
+    blnTemp : BOOL;
+    intLEN : INT;
+    intTemp : INT;
+    intQos : INT;
+    bytTemp : BYTE;
+    
+    ptrBuffer : ANY;
+    ptrANY AT ptrBuffer:STRUCT
+        bytS7Code : BYTE;
+        bytType : BYTE;
+        intQuantity : INT;
+        intDB : INT;
+        dwrAreaCrossPointer : DWORD;
+    END_STRUCT; 
+    
+    ptrStr : ANY;
+    ptrAnyStr AT ptrStr : STRUCT
+        bytS7Code : BYTE;
+        bytType : BYTE;
+        intQuantity : INT;
+        intDB : INT;
+        dwrAreaCrossPointer : DWORD;
+    END_STRUCT;     
+   
+   bytConnectFlags : WORD;
+   ConnectFlags AT bytConnectFlags : STRUCT
+        blnDummy : BOOL;
+        blnCleanSession : BOOL;
+        blnWill : BOOL;
+        blnQoS1 : BOOL;
+        blnQoS2 : BOOL;
+        blnWillRETAIN : BOOL;
+        blnPassword : BOOL;
+        blnUserName : BOOL;   
+   END_STRUCT ; 
+   arrConnectFlags AT bytConnectFlags : ARRAY[0..1] OF BYTE;
+   
+   blnCntrlDone : BOOL;
+   blnCntrlError : BOOL;
+   wrdCntrlStatus : WORD;
+   dwrCntrlResult1 : DWORD;
+   dwrCntrlResult2 : DWORD; 
+   blnResult1 AT dwrCntrlResult1 : ARRAY[0..31] OF BOOL; 
+   
+    intINT : INT;
+    arrWord AT intINT : STRUCT
+        bytLsb : BYTE;
+        bytMsb : BYTE; 
+    END_STRUCT;   
+   
+   TOP_SI: STRUCT
+        EV_CLASS: BYTE;
+        EV_NUM:   BYTE;
+        PRIORITY: BYTE;
+        NUM:      BYTE;
+        TYP2_3:   BYTE;
+        TYP1:     BYTE;
+        ZI1:      WORD;
+        ZI2_3:    DWORD;
+   END_STRUCT;
+
+   START_UP_SI: STRUCT
+        EV_CLASS: BYTE;
+        EV_NUM:   BYTE;
+        PRIORITY: BYTE;
+        NUM:      BYTE;
+        TYP2_3:   BYTE;
+        TYP1:     BYTE;
+        ZI1:      WORD;
+        ZI2_3:    DWORD;
+   END_STRUCT;   
+          
+END_VAR
+
+VAR
+   // Static Variables
+   blnConnected : BOOL := FALSE;
+   blnLogged : BOOL := FALSE;
+   blnSendAct : BOOL := FALSE;
+   blnSendDone : BOOL := FALSE;
+   blnSendError : BOOL := FALSE;
+   blnRecvNdr : BOOL := FALSE; 
+   blnRecvError : BOOL := FALSE;
+   blnWatchDog : BOOL := FALSE;
+   blnRecvAct : BOOL := FALSE;
+   blnMemoryPublishMessage : BOOL := FALSE;
+   blnMemorySubscribe : BOOL := FALSE;
+   blnRecvFixedHeader : BOOL := FALSE;
+    
+   wrdSendStatus : WORD := 0; 
+   wrdRecvStatus : WORD := 0;
+   
+   intSendCount : INT := 2;
+   intRecvCount : INT := 0;
+   intWaitCount : INT := 0;  
+   intRecvLen : INT := 0;
+   intCommand : INT := 0;
+   intRecvMessageType : INT := 0;
+   intConnectReturnCode : INT := 255;
+   
+   tonWatchDog : TON;
+   tonKeepAlive : TON;
+   tonStartDelay : TON;
+   
+   arrSendBuffer : ARRAY[0..419] OF BYTE;
+   arrRecvBuffer : ARRAY[0..419] OF BYTE; 
+
+   strCONNECT : ARRAY[0..14] OF BYTE := 16#10,16#00,16#00,16#06,16#4d,16#51,16#49,16#73,16#64,16#70,16#03,16#00,16#00,16#3C;  
+
+END_VAR
+
+intTemp := RD_SINFO (TOP_SI := TOP_SI, START_UP_SI := START_UP_SI);
+
+(* reset last_time on system startup *)
+IF TOP_SI.EV_NUM <> 3 THEN 
+    intCommand := NOTHING;
+    blnConnected := FALSE;    
+END_IF;
+
+(* Clear Flags *)
+IF blnRxMessage THEN
+    blnRxMessage := FALSE;    
+END_IF;
+
+(* Subscribe message *)
+IF blnConnected AND blnLogged AND NOT blnMemorySubscribe AND blnSubscribe THEN
+    intCommand := SUBSCRIBE;  
+END_IF;
+
+(*Send message request*)
+IF blnConnected AND blnLogged AND NOT blnMemoryPublishMessage AND blnPublishMessage AND NOT blnSubscribe THEN
+    intCommand := PUBLISH;
+END_IF;
+
+blnMemoryPublishMessage := blnPublishMessage; 
+blnMemorySubscribe := blnSubscribe;
+
+(*State machine*)
+CASE intCommand OF
+    CONNECT: 
+        // Fixed header, byte 1
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |bit     | 7 |  6  | 5 | 4 |     3    |  2  |  1  |    0   |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 1  | Message Type(3) | DUP Flag | QoS level | RETAIN |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 2  |            Ramaining Length  (0)                |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+  
+        // |byte 3  |               Length MSB (0)                    |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+ 
+        // |byte 4  |               Length LSB (6)                    |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+ 
+        // |byte 5  |                 'M' (0x77)                      |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+ 
+        // |byte 6  |                 'Q' (0x69)                      |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+ 
+        // |byte 7  |                 'I' (0x6c)                      |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+ 
+        // |byte 8  |                 's' (0x6c)                      |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+  
+        // |byte 9  |                 'd' (0x6c)                      |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+ 
+        // |byte 10 |                 'p' (0x6c)                      |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+   
+        // |byte 11 |                  3  (0x03)                      |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+                            
+        
+        intLEN := BLKMOV(SRCBLK:=strCONNECT,RET_VAL:=intTemp,DSTBLK:=arrSendBuffer);
+        
+        // Fixed header, byte 12
+        // +--------+------+----------+-------------+-----+-----+-----------+----------------+---+
+        // |bit     | 7    |     6    |     5       |  4  |  3  |     2     |       1        | 0 |
+        // +--------+------+----------+-------------+-----+-----+-----------+----------------+---+
+        // |byte 12 | User | Password | Will RETAIN | Will  Qos | Will flag | Cleans session | X |
+        // +--------+------+----------+-------------+-----+-----+-----------+----------------+---+
+        ConnectFlags.blnCleanSession := blnCleanSession;
+        ConnectFlags.blnWill := blnWill;
+        ConnectFlags.blnWillRETAIN := blnWillRETAIN;
+        ConnectFlags.blnPassword := blnPassword;
+        ConnectFlags.blnUserName := blnUserName;
+        strCONNECT[11] := arrConnectFlags[0];
+        
+        // Keep Alive Timer
+        // Fixed header, byte 13,14
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 13 |      Keep Alive MSB (0x00)    |
+        // +--------+-------------------------------+ 
+        // |byte 14 |      Keep Alive LSB (0x3c)    |
+        // +--------+-------------------------------+  
+        intSendCount := 14;
+        
+        // Client Identifier
+        // Variable header, byte X
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte X  |        Length MSB (0)         |
+        // +--------+-------------------------------+ 
+        // |byte X+1|        Length LSB(2)          |
+        // +--------+-------------------------------+ 
+        // |byte X+2|         'i' (0x77)            |
+        // +--------+-------------------------------+ 
+        // |byte X+3|         'd' (0x69)            |
+        // +--------+-------------------------------+ 
+        ptrStr := strClientIdentifier;
+        ptrBuffer := arrSendBuffer[intSendCount];
+        ptrANY.intQuantity := ptrAnyStr.intQuantity;
+        intLEN := BLKMOV(SRCBLK:=ptrStr ,RET_VAL:=intTemp,DSTBLK:= ptrBuffer);
+        arrSendBuffer[intSendCount] := 16#00;
+        intSendCount := intSendCount + 1;
+        intSendCount := intSendCount + BYTE_TO_INT(arrSendBuffer[intSendCount]) + 1;
+        
+        IF blnWill THEN
+            // WillTopic
+            // Variable header, byte X
+            // +--------+---+---+---+---+---+---+---+---+
+            // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+            // +--------+---+---+---+---+---+---+---+---+
+            // |byte X  |        Length MSB (0)         |
+            // +--------+-------------------------------+ 
+            // |byte X+1|        Length LSB(4)          |
+            // +--------+-------------------------------+ 
+            // |byte X+2|         'w' (0x77)            |
+            // +--------+-------------------------------+ 
+            // |byte X+3|         'i' (0x69)            |
+            // +--------+-------------------------------+ 
+            // |byte X+4|         'l' (0x6c)            |
+            // +--------+-------------------------------+ 
+            // |byte X+4|         'l' (0x6c)            |
+            // +--------+-------------------------------+             
+            ptrStr := strWillTopic;
+            ptrBuffer := arrSendBuffer[intSendCount];
+            ptrANY.intQuantity := ptrAnyStr.intQuantity;
+            intLEN := BLKMOV(SRCBLK:=ptrStr ,RET_VAL:=intTemp,DSTBLK:= ptrBuffer);
+            arrSendBuffer[intSendCount] := 16#00;        
+            intSendCount := intSendCount + 1;
+            intSendCount := intSendCount + BYTE_TO_INT(arrSendBuffer[intSendCount]) + 1;           
+        
+            // WillMessage
+            // Variable header, byte X
+            // +--------+---+---+---+---+---+---+---+---+
+            // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+            // +--------+---+---+---+---+---+---+---+---+
+            // |byte X  |        Length MSB (0)         |
+            // +--------+-------------------------------+ 
+            // |byte X+1|        Length LSB(4)          |
+            // +--------+-------------------------------+ 
+            // |byte X+2|         'w' (0x77)            |
+            // +--------+-------------------------------+ 
+            // |byte X+3|         'm' (0x6d)            |
+            // +--------+-------------------------------+ 
+            // |byte X+4|         's' (0x73)            |
+            // +--------+-------------------------------+ 
+            // |byte X+4|         'g' (0x67)            |
+            // +--------+-------------------------------+ 
+            ptrStr := strWillMessage;
+            ptrBuffer := arrSendBuffer[intSendCount];
+            ptrANY.intQuantity := ptrAnyStr.intQuantity;
+            intLEN := BLKMOV(SRCBLK:=ptrStr ,RET_VAL:=intTemp,DSTBLK:= ptrBuffer);
+            arrSendBuffer[intSendCount] := 16#00;        
+            intSendCount := intSendCount + 1;
+            intSendCount := intSendCount + BYTE_TO_INT(arrSendBuffer[intSendCount]) + 1;  
+        END_IF;
+
+        // Username
+        // Variable header, byte X
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte X  |        Length MSB (0)         |
+        // +--------+-------------------------------+ 
+        // |byte X+1|        Length LSB(3)          |
+        // +--------+-------------------------------+ 
+        // |byte X+2|         'u' (0x75)            |
+        // +--------+-------------------------------+ 
+        // |byte X+3|         's' (0x73)            |
+        // +--------+-------------------------------+ 
+        // |byte X+4|         'e' (0x65)            |
+        // +--------+-------------------------------+ 
+        ptrStr := strUserName;
+        ptrBuffer := arrSendBuffer[intSendCount];
+        ptrANY.intQuantity := ptrAnyStr.intQuantity;
+        intLEN := BLKMOV(SRCBLK:=ptrStr ,RET_VAL:=intTemp,DSTBLK:= ptrBuffer);
+        arrSendBuffer[intSendCount] := 16#00;
+        intSendCount := intSendCount + 1;
+        intSendCount := intSendCount + BYTE_TO_INT(arrSendBuffer[intSendCount]) + 1;    
+
+        // Password
+        // Variable header, byte X
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte X  |        Length MSB (0)         |
+        // +--------+-------------------------------+ 
+        // |byte X+1|        Length LSB(3)          |
+        // +--------+-------------------------------+ 
+        // |byte X+2|         'p' (0x70)            |
+        // +--------+-------------------------------+ 
+        // |byte X+3|         'a' (0x61)            |
+        // +--------+-------------------------------+ 
+        // |byte X+4|         's' (0x73)            |
+        // +--------+-------------------------------+ 
+        ptrStr := strPassword;
+        ptrBuffer := arrSendBuffer[intSendCount];
+        ptrANY.intQuantity := ptrAnyStr.intQuantity;
+        intLEN := BLKMOV(SRCBLK:=ptrStr ,RET_VAL:=intTemp,DSTBLK:= ptrBuffer);
+        arrSendBuffer[intSendCount] := 16#00;
+        intSendCount := intSendCount + 1;
+        intSendCount := intSendCount + BYTE_TO_INT(arrSendBuffer[intSendCount])+1; 
+
+        // Fixed header, byte 2
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 2  |    Ramaining Length           |
+        // +--------+-------------------------------+ 
+        arrSendBuffer[1] := INT_TO_BYTE(intSendCount-2);
+                
+        blnSendAct := TRUE;
+        blnWatchDog := TRUE;
+        blnTxMessage := TRUE;
+
+        blnRecvAct := TRUE;      
+        blnRecvNdr := FALSE;                           
+        intCommand := NOTHING;
+        intRecvCount := 0;        
+        //intWaitCount := 4;
+
+    CONNACK:
+        // Fixed header, byte 1,2
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |bit     | 7 |  6  | 5 | 4 |     3    |  2  |  1  |    0   |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 1  | Message Type(3) | DUP Flag | QoS level | RETAIN |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 2  |            Ramaining Length  (2)                |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+ 
+        // Password
+        // Variable header, byte X
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 3  | X | X | X | X | X | X | X | X |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 4  |        Return code            |
+        // +--------+-------------------------------+         
+
+        IF (blnRecvNdr) THEN
+            arrRecvBuffer[0] :=    arrRecvBuffer[0] AND 16#F0;
+            IF (arrRecvBuffer[0] = 16#20) AND (arrRecvBuffer[1] = 16#02) THEN
+                IF (arrRecvBuffer[2] = 0) AND (arrRecvBuffer[3] = 0) THEN
+                    blnLogged := true;
+                    intConnectReturnCode := 0;
+                    intRecvCount := 0;  
+                    intCommand := NOTHING; 
+                    blnWatchDog := FALSE;  
+                    blnRecvAct := FALSE;                                                               
+                ELSE
+                    intConnectReturnCode := BYTE_TO_INT(arrRecvBuffer[3]);
+                END_IF;  
+            ELSE
+                //intCommand := PINGREQ; 
+                ;                          
+            END_IF;
+            blnRecvNdr := FALSE;  
+            blnTxMessage := FALSE;            
+        END_IF;   
+    ;
+   
+    PINGREQ: 
+        // Fixed header, byte 1,2
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |bit     | 7 |  6  | 5 | 4 |     3    |  2  |  1  |    0   |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 1  | Message Type(12)| DUP Flag | QoS level | RETAIN |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 2  |            Ramaining Length  (0)                |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+     
+        arrSendBuffer[0] := 16#C0;
+        arrSendBuffer[1] := 16#00;
+        intSendCount := 2;
+        
+        blnSendAct := TRUE;
+        blnWatchDog := TRUE;
+                      
+        blnRecvAct := TRUE;          
+        blnRecvNdr := FALSE;           
+        intCommand := NOTHING;  
+        intRecvCount := 0;
+        intWaitCount := 2;    
+    ;
+    PINGRESP:
+        // Fixed header, byte 1,2
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |bit     | 7 |  6  | 5 | 4 |     3    |  2  |  1  |    0   |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 1  | Message Type(13)| DUP Flag | QoS level | RETAIN |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 2  |            Ramaining Length  (0)                |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+       
+        IF (blnRecvNdr) THEN
+            arrRecvBuffer[0] :=    arrRecvBuffer[0] AND 16#F0;
+            IF (arrRecvBuffer[0] = 16#D0) AND (arrRecvBuffer[1] = 16#00) THEN
+                //Wait message again 
+                intCommand := NOTHING; 
+                intRecvCount := 0; 
+                blnWatchDog := FALSE;                             
+                ;                            
+            END_IF;
+            blnRecvNdr := FALSE;              
+        END_IF;
+      
+        ;         
+                     
+    PUBLISH:
+        ptrAnyStr.bytS7Code := anyMqMessage.bytS7Code;
+        ptrAnyStr.bytType := anyMqMessage.bytType;
+        ptrAnyStr.intQuantity := anyMqMessage.intQuantity; 
+        ptrAnyStr.intDB := anyMqMessage.intDB; 
+        ptrAnyStr.dwrAreaCrossPointer := anyMqMessage.dwrAreaCrossPointer; 
+                    
+        ptrBuffer := arrSendBuffer[0];
+        ptrANY.intQuantity := ptrAnyStr.intQuantity;    
+        intLEN := BLKMOV(SRCBLK:=ptrStr,RET_VAL:=intTemp,DSTBLK:=ptrBuffer);
+        intSendCount := ptrAnyStr.intQuantity; 
+        blnSendAct := TRUE;
+        intQos := BYTE_TO_INT(arrSendBuffer[0] AND 16#06);          
+
+        blnTxMessage := TRUE;
+        CASE intQos OF
+            0:  blnWatchDog := FALSE;  
+                intCommand := NOTHING;
+                    
+            2:  blnWatchDog := TRUE;  
+                blnRecvAct := TRUE;          
+                blnRecvNdr := FALSE;           
+                intCommand := PUBACK;  
+                intRecvCount := 0;
+                intWaitCount := 4; 
+            ;
+            4:  blnWatchDog := TRUE;  
+                blnRecvAct := TRUE;          
+                blnRecvNdr := FALSE;           
+                intCommand := PUBREC;  
+                intRecvCount := 0;
+                intWaitCount := 4; 
+            ;
+        ELSE:
+            ;         
+        END_CASE;                                         
+    ;
+    PUBACK:
+        // Fixed header, byte 1,2
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |bit     | 7 |  6  | 5 | 4 |     3    |  2  |  1  |    0   |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 1  | Message Type(04)| DUP Flag | QoS level | RETAIN |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 2  |            Ramaining Length  (2)                |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+   
+        // Message ID
+        // Variable header, byte X
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 3  |       Message ID MSB          |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 4  |       Message ID LSB          |
+        // +--------+-------------------------------+             
+        IF (blnRecvNdr) THEN
+            arrRecvBuffer[0] :=    arrRecvBuffer[0] AND 16#F0;
+            intTemp := BYTE_TO_INT(arrSendBuffer[3]) + 4;           
+            IF (arrRecvBuffer[0] = 16#40) AND (arrRecvBuffer[1] = 16#02) AND 
+               (arrRecvBuffer[2] = arrSendBuffer[intTemp]) AND 
+               (arrRecvBuffer[3] = arrSendBuffer[intTemp+1]) THEN
+                //Wait message again 
+                intCommand := NOTHING; 
+                intRecvCount := 0; 
+                blnWatchDog := FALSE;                                      
+                ;                            
+            END_IF;
+            blnRecvNdr := FALSE; 
+            blnTxMessage := FALSE;                         
+        END_IF;              
+    ;
+    PUBREC:
+        IF (blnRecvNdr) THEN
+            arrRecvBuffer[0] :=    arrRecvBuffer[0] AND 16#F0;
+            intTemp := BYTE_TO_INT(arrSendBuffer[3]) + 4;           
+
+            IF (arrRecvBuffer[0] = 16#50) AND (arrRecvBuffer[1] = 16#02) AND 
+               (arrRecvBuffer[2] = arrSendBuffer[intTemp]) AND 
+               (arrRecvBuffer[3] = arrSendBuffer[intTemp+1]) THEN
+                //Wait message again 
+                arrSendBuffer[2] := arrSendBuffer[intTemp];
+                arrSendBuffer[3] := arrSendBuffer[intTemp+1];                 
+                intCommand := PUBREL; 
+                intRecvCount := 0; 
+                blnWatchDog := FALSE;  
+                blnRecvAct := FALSE;          
+                blnRecvNdr := FALSE;                                                        
+                ;  
+            ELSE
+                //Wait message again 
+                arrSendBuffer[2] := arrRecvBuffer[2];
+                arrSendBuffer[3] := arrRecvBuffer[3];                  
+                intCommand := PUBREL; 
+                
+                intRecvCount := 0; 
+                blnWatchDog := FALSE;  
+                blnRecvAct := FALSE;          
+                blnRecvNdr := FALSE;                                             
+            END_IF;
+            blnRecvNdr := FALSE;              
+        END_IF;    
+    ;
+    PUBREL:
+        // Fixed header, byte 1,2
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |bit     | 7 |  6  | 5 | 4 |     3    |  2  |  1  |    0   |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 1  | Message Type(06)| DUP Flag | QoSlev(01)| RETAIN |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 2  |            Ramaining Length  (2)                |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+   
+        // Message ID
+        // Variable header, byte X
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 3  |       Message ID MSB          |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 4  |       Message ID LSB          |
+        // +--------+-------------------------------+     
+        intTemp := BYTE_TO_INT(arrSendBuffer[3]) + 4;     
+        arrSendBuffer[0] := 16#62;
+        arrSendBuffer[1] := 16#02;
+       
+        intSendCount := 4;
+        
+        blnSendAct := TRUE;
+        blnWatchDog := TRUE;
+                      
+        blnRecvAct := TRUE;          
+        blnRecvNdr := FALSE;           
+        intCommand := PUBCOMP;  
+        intRecvCount := 0;
+        intWaitCount := 4;             
+    ;
+    PUBCOMP:
+        // Fixed header, byte 1,2
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |bit     | 7 |  6  | 5 | 4 |     3    |  2  |  1  |    0   |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 1  | Message Type(07)| DUP Flag | QoSlev(XX)| RETAIN |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 2  |            Ramaining Length  (2)                |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+   
+        // Message ID
+        // Variable header, byte X
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 3  |       Message ID MSB          |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 4  |       Message ID LSB          |
+        // +--------+-------------------------------+     
+        IF (blnRecvNdr) THEN
+            arrRecvBuffer[0] :=    arrRecvBuffer[0] AND 16#F0;
+            intTemp := BYTE_TO_INT(arrSendBuffer[3]) + 4;
+            IF (arrRecvBuffer[0] = 16#70) AND (arrRecvBuffer[1] = 16#02) AND 
+               (arrRecvBuffer[2] = arrSendBuffer[intTemp]) AND 
+               (arrRecvBuffer[3] = arrSendBuffer[intTemp+1]) THEN
+                //Wait message again 
+                intCommand := NOTHING; 
+                intRecvCount := 0; 
+                blnWatchDog := FALSE;                                      
+                ;                            
+            END_IF;
+            blnRecvNdr := FALSE;              
+        END_IF;      
+    ;
+    SUBSCRIBE:
+        // Fixed header, byte 1,2
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |bit     | 7 |  6  | 5 | 4 |     3    |  2  |  1  |    0   |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 1  | Message Type(08)| DUP Flag | QoSlev(01)| RETAIN |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 2  |            Ramaining Length  (2)                |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+       
+        ptrAnyStr.bytS7Code := anyMqMessage.bytS7Code;
+        ptrAnyStr.bytType := anyMqMessage.bytType;
+        ptrAnyStr.intQuantity := anyMqMessage.intQuantity; 
+        ptrAnyStr.intDB := anyMqMessage.intDB; 
+        ptrAnyStr.dwrAreaCrossPointer := anyMqMessage.dwrAreaCrossPointer; 
+             
+        ptrBuffer := arrSendBuffer[0];
+        ptrANY.intQuantity := ptrAnyStr.intQuantity;    
+        intLEN := BLKMOV(SRCBLK:=ptrStr,RET_VAL:=intTemp,DSTBLK:=ptrBuffer);
+        intSendCount := ptrAnyStr.intQuantity; 
+        
+        blnSendAct := TRUE;
+        blnWatchDog := TRUE;  
+        blnRecvAct := TRUE;          
+        blnRecvNdr := FALSE;           
+        intCommand := SUBACK;  
+        intRecvCount := 0;
+        intWaitCount := 5;      
+    ;
+    SUBACK:
+        // Fixed header, byte 1,2
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |bit     | 7 |  6  | 5 | 4 |     3    |  2  |  1  |    0   |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 1  | Message Type(09)| DUP Flag | QoSlev(XX)| RETAIN |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 2  |               Ramaining Length                  |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+  
+        // Message ID
+        // Variable header, byte 3,4
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 3  |       Message ID MSB          |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 4  |       Message ID LSB          |
+        // +--------+-------------------------------+
+        // Payload
+        // Variable header, byte 5
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 5  | X | X | X | X | X | X |  QoS  |
+        // +--------+---+---+---+---+---+---+---+---+         
+                       
+        IF (blnRecvNdr) THEN
+            arrRecvBuffer[0] := arrRecvBuffer[0] AND 16#F0;
+            IF (arrRecvBuffer[0] = 16#90) AND (arrRecvBuffer[1] = 16#03) AND 
+               (arrRecvBuffer[2] = arrSendBuffer[2]) AND 
+               (arrRecvBuffer[3] = arrSendBuffer[3]) AND
+               (arrRecvBuffer[4] = 16#01) THEN
+                //Wait message again 
+                intCommand := NOTHING; 
+                intRecvCount := 0; 
+                blnWatchDog := FALSE;                                                   
+                ;                            
+            END_IF;
+            blnRecvNdr := FALSE;              
+        END_IF;      
+    ;
+    UNSUBSCRIBE:
+    ;
+    RX_PUBLISH:
+        //Max QoS=1, set in the subscription.
+        IF (blnRecvNdr) THEN
+            bytTemp := arrRecvBuffer[0] AND 16#06;
+            //Reply with PUBACK
+            IF (bytTemp = 16#2) THEN
+                intCommand := RX_PUBACK; 
+            ELSE 
+                intCommand := NOTHING;                                 
+            END_IF;
+            blnRxMessage := TRUE;
+            ptrStr := arrRecvBuffer[0];
+            anyRxMessage.bytS7Code := ptrAnyStr.bytS7Code;
+            anyRxMessage.bytType := ptrAnyStr.bytType;
+            anyRxMessage.intQuantity := BYTE_TO_INT(arrRecvBuffer[1]) + 2; 
+            anyRxMessage.intDB := ptrAnyStr.intDB ;
+            anyRxMessage.dwrAreaCrossPointer :=ptrAnyStr.dwrAreaCrossPointer;
+                                 
+        END_IF;                
+    ;
+    RX_PUBACK:
+        // Fixed header, byte 1,2
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |bit     | 7 |  6  | 5 | 4 |     3    |  2  |  1  |    0   |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 1  | Message Type(04)| DUP Flag | QoS level | RETAIN |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 2  |            Ramaining Length  (2)                |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+   
+        // Message ID
+        // Variable header, byte X
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 3  |       Message ID MSB          |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 4  |       Message ID LSB          |
+        // +--------+-------------------------------+      
+        intTemp := BYTE_TO_INT(arrRecvBuffer[3]) + 4;     
+        arrSendBuffer[0] := 16#40;
+        arrSendBuffer[1] := 16#02;
+        arrSendBuffer[2] := arrRecvBuffer[intTemp];
+        arrSendBuffer[3] := arrRecvBuffer[intTemp+1];      
+        intSendCount := 4;
+        
+        blnSendAct := TRUE;
+        blnWatchDog := FALSE; //No reply from server
+                      
+        blnRecvAct := FALSE;          
+        blnRecvNdr := FALSE;           
+        intCommand := NOTHING;  
+        intRecvCount := 0;
+        intWaitCount := 0;               
+    ;
+ELSE:;
+END_CASE;
+
+//Send data to Broker
+blnTemp := blnConnected;
+
+AG_LSEND(ACT:=blnSendAct, ID := ID, LADDR := LADDR, SEND := arrSendBuffer, LEN := intSendCount, DONE := blnSendDone, ERROR := blnSendError, STATUS := wrdSendStatus);
+(*
+The connection is not established. The send job should only be attempted again after waiting for at least 100 ms.
+*)
+IF blnSendError AND (wrdSendStatus = 16#8304) THEN
+    blnConnected := FALSE;
+    blnLogged := FALSE;
+    intCommand := NOTHING;
+END_IF;
+
+IF blnSendDone AND NOT blnSendError AND wrdSendStatus = 16#0000 THEN
+    blnConnected := TRUE;  
+END_IF;
+
+
+IF NOT blnConnected THEN
+    tonStartDelay(IN := TRUE, PT := T#5S);   
+    ;
+END_IF;
+
+IF tonStartDelay.Q THEN
+    tonStartDelay(IN := false);
+    blnWatchDog := FALSE;  
+    intCommand := CONNECT; 
+  ;    
+END_IF;
+    
+
+//
+tonWatchDog(IN := blnWatchDog, PT := T#2S);
+
+IF tonWatchDog.Q THEN
+    tonWatchDog(IN := FALSE);
+    blnWatchDog := FALSE;
+    blnRecvFixedHeader := FALSE;
+    blnConnected := FALSE;
+    blnLogged := FALSE;            
+  ;    
+END_IF;
+
+IF (blnSendAct = TRUE) THEN
+    blnSendAct := FALSE; 
+   ;
+END_IF;
+
+IF blnSendDone AND NOT blnSendError AND wrdSendStatus = 16#0000 THEN
+    ;
+END_IF;
+
+//Recei data from broker
+//Received Data
+ptrBuffer := arrRecvBuffer[intRecvCount];
+ptrANY.intQuantity := intWaitCount;
+ptrANY.bytType := 16#02;
+
+
+//Fixed header receiver
+IF NOT blnRecvFixedHeader THEN
+    ptrANY.intQuantity := 2;    
+    AG_LRECV(ID := ID, LADDR := LADDR, RECV := ptrBuffer, NDR := blnRecvFixedHeader, ERROR := blnRecvError, STATUS := wrdRecvStatus, LEN:= intLEN);
+    
+    IF blnRecvFixedHeader THEN
+       
+        intRecvCount := intRecvCount + intLEN;
+        intWaitCount := BYTE_TO_INT(arrRecvBuffer[1]); 
+        
+        ptrBuffer := arrRecvBuffer[intRecvCount];    
+        ptrANY.intQuantity := intWaitCount;
+             
+        intCommand := BYTE_TO_INT(SHR(IN:=arrRecvBuffer[0] AND 16#F0, N:=4));        
+        IF (intCommand = PUBLISH) THEN
+            //blnRxMessage := TRUE;
+            ptrStr := arrRecvBuffer[0];
+            anyRxMessage.bytS7Code := ptrAnyStr.bytS7Code;
+            anyRxMessage.bytType := ptrAnyStr.bytType;
+            anyRxMessage.intQuantity := intRecvCount + intWaitCount;
+            anyRxMessage.intDB := ptrAnyStr.intDB ;
+            anyRxMessage.dwrAreaCrossPointer :=ptrAnyStr.dwrAreaCrossPointer;
+            intCommand := RX_PUBLISH;    
+        END_IF;   
+                 
+        IF (arrRecvBuffer[1] = 16#00) THEN
+            blnRecvFixedHeader := FALSE;  
+            blnRecvNdr := TRUE;
+        END_IF;       
+    END_IF;
+    
+END_IF;
+
+//Payload
+IF blnRecvFixedHeader THEN      
+    AG_LRECV(ID := ID, LADDR := LADDR, RECV := ptrBuffer, NDR := blnRecvNdr, ERROR := blnRecvError, STATUS := wrdRecvStatus, LEN:= intLEN);
+    IF blnRecvNdr THEN                         
+        blnRecvFixedHeader := FALSE;
+        intRecvCount := 0;  
+        blnRecvAct := FALSE;   
+        blnWatchDog := FALSE;         
+    END_IF;
+END_IF;
+
+
+//"Keep Alive" function when keep alive time is over
+IF (blnLogged ) OR (NOT blnLogged AND blnConnected) THEN
+    tonKeepAlive(IN := TRUE, PT := T#10S);
+ELSE
+    tonKeepAlive(IN := FALSE); 
+END_IF;
+
+IF tonKeepAlive.Q THEN
+    IF NOT blnLogged THEN
+        intCommand :=  CONNECT;        
+    ELSE
+        intCommand := PINGREQ;         
+    END_IF;
+
+    tonKeepAlive(IN := FALSE);
+   ;
+END_IF;
+
+
+    // Statement Section
+    ;
+END_FUNCTION_BLOCK
+
+(*
+/**
+* Purpose:  Build a MQTT Message using the PAYLOAD. Max size of message is 128 bytes.
+* @param   blnAct  Build the message
+* @param   blnDup  0: Message send for firts time, 1: Message is duplicate
+* @param   blnRetain 
+* @param   intQos  Quality of service level
+* @param   intID ID of the message quen used intQos=1 or intQos=2
+* @param   anyTopic Pointer to topic string. Max length of 23 chars
+* @param   anyPayload Pointer to payload information.              
+* @return   the index OF the first occurrence OF the rsTargetUser
+*           in the rasUserList ARRAY. IF target user NOT found, RETURN -1.
+*)
+
+FUNCTION_BLOCK FB201
+
+
+// Block Parameters
+VAR_INPUT
+    // Input Parameters
+    blnAct : BOOL := FALSE;
+    blnDup : BOOL := FALSE;
+    blnRetain : BOOL := FALSE;
+    intQos : INT := 0;
+    intID : INT := 0;
+    anyTopic : ANY;
+    anyPayload : ANY;
+
+END_VAR
+
+VAR_OUTPUT
+    // Output Parameters
+    anyMqMessage : UDT200;     
+  
+END_VAR
+
+VAR_IN_OUT
+    // I/O Parameters 
+END_VAR
+
+
+VAR_TEMP
+    // Temporary Variables
+    intLen : INT;
+    intTemp: INT;
+    intSendCount : INT;
+    
+    ptrBuffer : ANY;
+    ptrANY AT ptrBuffer:STRUCT
+        bytS7Code : BYTE;
+        bytType : BYTE;
+        intQuantity : INT;
+        intDB : INT;
+        dwrAreaCrossPointer : DWORD;
+    END_STRUCT;
+    
+    ptrStr : ANY;
+    ptrAnyStr AT ptrStr : STRUCT
+        bytS7Code : BYTE;
+        bytType : BYTE;
+        intQuantity : INT;
+        intDB : INT;
+        dwrAreaCrossPointer : DWORD;
+    END_STRUCT;     
+    
+    intINT : INT;
+    arrWord AT intINT : STRUCT
+        bytLsb : BYTE;
+        bytMsb : BYTE; 
+    END_STRUCT;
+    
+END_VAR
+
+VAR
+    // Static Variables
+    blnMemoryAct : BOOL := FALSE;
+    arrMessage : ARRAY[0..255] OF BYTE;    
+END_VAR
+    // Statement Section
+    IF NOT blnMemoryAct AND blnAct THEN
+        ptrBuffer := arrMessage;
+        intINT := intID;
+        // Fixed header, byte 1
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |bit     | 7 |  6  | 5 | 4 |     3    |  2  |  1  |    0   |
+        // +--------+---+-----+---+---+----------+-----+-----+--------+
+        // |byte 1  | Message Type(3) | DUP Flag | QoS level | RETAIN |
+        // +--------+-----------------+----------+-----------+--------+
+        arrMessage[0] := 16#30;
+        arrMessage[0] := arrMessage[0] OR SHL(IN:=BOOL_TO_BYTE(blnDup), N:=3) OR SHL(IN:=INT_TO_BYTE(intQos), N:=1) OR BOOL_TO_BYTE(blnRetain);
+        
+        // Topic
+        // Variable header, byte 3
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 3  |        Length MSB (0)         |
+        // +--------+-------------------------------+ 
+        // |byte 4  |        Length LSB(3)          |
+        // +--------+-------------------------------+ 
+        // |byte 5  |         'a' (0x61)            |
+        // +--------+-------------------------------+ 
+        // |byte 6  |         '/' (0x2f)            |
+        // +--------+-------------------------------+ 
+        // |byte 7  |         'b' (0x62)            |
+        // +--------+-------------------------------+       
+                               
+        ptrBuffer := arrMessage[2];
+        ptrStr := anyTopic;
+        ptrANY.intQuantity :=  ptrAnyStr.intQuantity;     
+        intLen := BLKMOV(SRCBLK:=anyTopic,RET_VAL:=intTemp,DSTBLK:=ptrBuffer);
+        arrMessage[2] := 0;
+        intSendCount := BYTE_TO_INT(arrMessage[3]) + 4;
+ 
+        // MessageID  
+        // Variable header, byte 9
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+           
+        // |byte 9  |       Message ID MSB (0)      |
+        // +--------+-------------------------------+ 
+        // |byte 10 |       Message ID MSB (10)     |
+        // +--------+-------------------------------+            
+        arrMessage[intSendCount] := arrWord.bytLsb;
+        intSendCount := intSendCount+1;
+        arrMessage[intSendCount] := arrWord.bytMsb;
+        intSendCount := intSendCount+1; 
+ 
+        // Payload
+        // Variable header, byte 11...
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+           
+        // |byte 11 |           Payload             |
+        // +~~~~~~~~|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+               
+        ptrBuffer := arrMessage[intSendCount];
+        ptrStr := anyPayload;
+        ptrANY.intQuantity :=  ptrAnyStr.intQuantity;    
+        intLen := BLKMOV(SRCBLK:=anyPayload,RET_VAL:=intTemp,DSTBLK:=ptrBuffer);  
+        ptrBuffer := anyTopic; 
+        intTemp := intSendCount + ptrAny.intQuantity;
+        intSendCount := intTemp - 2;
+
+        // Fixed header, byte 2
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 2  |    Ramaining Length           |
+        // +--------+-------------------------------+        
+        arrMessage[1] := INT_TO_BYTE(intSendCount); 
+        
+        //Asign the pointer MQCLIENT                 
+        ptrStr :=  arrMessage;
+        
+        anyMqMessage.bytS7Code := ptrAnyStr.bytS7Code;
+        anyMqMessage.bytType := ptrAnyStr.bytType;
+        anyMqMessage.intQuantity := intTemp;
+        anyMqMessage.intDB := ptrAnyStr.intDB; 
+        anyMqMessage.dwrAreaCrossPointer := ptrAnyStr.dwrAreaCrossPointer;
+
+    END_IF;
+    blnMemoryAct := blnAct;
+    ;
+END_FUNCTION_BLOCK
+
+(*
+/**
+* Build a MQTT Subscribe Message using the PAYLOAD. Max size of message is 128 bytes.
+* @param   blnAct:  Build the message
+* @param   intID: ID of the message quen used intQos=1 or intQos=2
+* @param   anyTopic: Pointer to topic string. Max length of 23 chars             
+*/
+*)
+FUNCTION_BLOCK FB202
+
+
+// Block Parameters
+VAR_INPUT
+    // Input Parameters
+    blnAct : BOOL := FALSE;
+    intID : INT := 0;
+    intQos : INT := 0;    
+    anyTopic : ANY;
+END_VAR
+
+VAR_OUTPUT
+    // Output Parameters
+    anyMqMessage : UDT200;     
+  
+END_VAR
+
+VAR_IN_OUT
+    // I/O Parameters 
+END_VAR
+
+
+VAR_TEMP
+    // Temporary Variables
+    intLen : INT;
+    intTemp: INT;
+    intSendCount : INT;
+    
+    ptrBuffer : ANY;
+    ptrANY AT ptrBuffer:STRUCT
+        bytS7Code : BYTE;
+        bytType : BYTE;
+        intQuantity : INT;
+        intDB : INT;
+        dwrAreaCrossPointer : DWORD;
+    END_STRUCT;
+    
+    ptrStr : ANY;
+    ptrAnyStr AT ptrStr : STRUCT
+        bytS7Code : BYTE;
+        bytType : BYTE;
+        intQuantity : INT;
+        intDB : INT;
+        dwrAreaCrossPointer : DWORD;
+    END_STRUCT;     
+    
+    intINT : INT;
+    arrWord AT intINT : STRUCT
+        bytLsb : BYTE;
+        bytMsb : BYTE; 
+    END_STRUCT;
+    
+END_VAR
+
+VAR
+    // Static Variables
+    blnMemoryAct : BOOL := FALSE;
+    arrMessage : ARRAY[0..255] OF BYTE;    
+END_VAR
+    // Statement Section
+    IF NOT blnMemoryAct AND blnAct THEN
+        ptrBuffer := arrMessage;
+        intINT := intID;
+        // Fixed header, byte 1
+        // +--------+---+-----+---+---+----------+-------+-------+--------+
+        // |bit     | 7 |  6  | 5 | 4 |     3    |   2   |   1   |    0   |
+        // +--------+---+-----+---+---+----------+-------+-------+--------+
+        // |byte 1  | Message Type(8) | DUP Flag | QoS level (1) | RETAIN |
+        // +--------+-----------------+----------+---------------+--------+
+        arrMessage[0] := 16#82;
+        intSendCount := 2;
+               
+        // MessageID  
+        // Variable header, byte 3
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+           
+        // |byte 3  |       Message ID MSB (0)      |
+        // +--------+-------------------------------+ 
+        // |byte 4  |       Message ID MSB (10)     |
+        // +--------+-------------------------------+      
+        arrMessage[intSendCount] := arrWord.bytLsb;
+        intSendCount := intSendCount+1;
+        arrMessage[intSendCount] := arrWord.bytMsb;
+        intSendCount := intSendCount+1; 
+                
+        //Topic Name
+        // Variable header, byte 5
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 5  |        Length MSB (0)         |
+        // +--------+-------------------------------+ 
+        // |byte 6  |        Length LSB(3)          |
+        // +--------+-------------------------------+ 
+        // |byte 7  |         'a' (0x61)            |
+        // +--------+-------------------------------+ 
+        // |byte 8  |         '/' (0x2f)            |
+        // +--------+-------------------------------+ 
+        // |byte 9  |         'b' (0x62)            |
+        // +--------+-------------------------------+         
+        ptrBuffer := arrMessage[4];
+        ptrStr := anyTopic;
+        ptrANY.intQuantity :=  ptrAnyStr.intQuantity;     
+        intLen := BLKMOV(SRCBLK:=anyTopic,RET_VAL:=intTemp,DSTBLK:=ptrBuffer);
+        arrMessage[4] := 0;
+        intSendCount := BYTE_TO_INT(arrMessage[5]) + 6;
+        
+        //Qos
+        // Variable header, byte 10
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 10 |    Requested QoS (1)          |
+        // +--------+-------------------------------+         
+        arrMessage[intSendCount] := INT_TO_BYTE(intQos);
+     
+        // Fixed header, byte 2
+        // +--------+---+---+---+---+---+---+---+---+
+        // |bit     | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+        // +--------+---+---+---+---+---+---+---+---+
+        // |byte 2  |    Ramaining Length           |
+        // +--------+-------------------------------+   
+        intTemp := intSendCount - 1;        
+        arrMessage[1] := INT_TO_BYTE(intTemp); 
+        
+        //Asign the pointer MQCLIENT                 
+        ptrStr :=  arrMessage;
+        
+        anyMqMessage.bytS7Code := ptrAnyStr.bytS7Code;
+        anyMqMessage.bytType := ptrAnyStr.bytType;
+        anyMqMessage.intQuantity := intSendCount + 1;
+        anyMqMessage.intDB := ptrAnyStr.intDB; 
+        anyMqMessage.dwrAreaCrossPointer := ptrAnyStr.dwrAreaCrossPointer;
+        
+    END_IF;
+    blnMemoryAct := blnAct;
+    ;
+END_FUNCTION_BLOCK
+
+
