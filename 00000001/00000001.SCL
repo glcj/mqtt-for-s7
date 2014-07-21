@@ -1,0 +1,121 @@
+FUNCTION_BLOCK STIME
+TITLE = 'STIME'
+//
+//this function block makes sure that the timer of a siemens sps counts from 0 - 2^32-1.
+//
+VERSION : '1.4'
+AUTHOR  : dalbi
+NAME    : STIME
+FAMILY  : MEASURE
+
+VAR_INPUT
+END_VAR
+VAR_OUTPUT
+  tx : DWORD;
+    at_tx AT tx : ARRAY[0..31] OF BOOL;
+END_VAR
+VAR
+  last_time: DWORD;
+  bit31: BOOL;
+  init: BOOL := true;
+END_VAR
+VAR_TEMP
+  TOP_SI: struct
+    EV_CLASS: byte;
+    EV_NUM:   byte;
+    PRIORITY: byte;
+    NUM:      byte;
+    TYP2_3:   byte;
+    TYP1:     byte;
+    ZI1:      word;
+    ZI2_3:    dword;
+  end_struct;
+  START_UP_SI: struct
+    EV_CLASS: byte;
+    EV_NUM:   byte;
+    PRIORITY: byte;
+    NUM:      byte;
+    TYP2_3:   byte;
+    TYP1:     byte;
+    ZI1:      word;
+    ZI2_3:    dword;
+  end_struct;
+  ERR : INT;
+END_VAR
+
+(* this FB is only necessary for siemens sps
+the siemens sps timer counts from 0 to 2^31-1 and starts at 0 sfter overrun.
+this means that the bit 31 (the highest bit ) will never be used and therefore
+a problem arises when t2 - t1 is checked.
+t2 - t1 is always valid also in an timer overrun situation where the time t1 is very high and t2 is very low.
+the result of the subtraction t2 - t1 however is still valid.
+this calculation does not work for soiemens because the highest bit is not used.
+
+this module stores the highest bit, changes the highest bit at every overrun occurence and stuffs ther highest bit in the output.
+the output is then used by t_plc_us and t_plc_ms.
+
+the correction needs and fb and not a function because the value of the highest bit has to be stored.
+
+do never use this function block in a codesys environment. the timer in codesys is correct and runs from 0 to 2^32-1
+*)
+  
+(* read actual startup info *)
+(* OB1_SCAN_1  BYTE  -  B#16#01: Abschluss des Neustarts (Warmstarts)
+                     -  B#16#02: Abschluss des Wiederanlaufs
+                     -  B#16#03: Abschluss des freien Zyklus
+                     -  B#16#04: Abschluss des Kaltstarts
+                     -  B#16#05: Erster OB 1-Zyklus der neuen Master-CPU nach 
+                                 Master-Reserve-Umschaltung und STOP des 
+                                 bisherigen Masters *)
+
+ERR := RD_SINFO (TOP_SI := TOP_SI, START_UP_SI := START_UP_SI);
+
+(* reset last_time on system startup *)
+IF TOP_SI.EV_NUM = 1 OR TOP_SI.EV_NUM = 2 OR TOP_SI.EV_NUM = 4 OR NOT init THEN 
+    last_time := 0;
+    bit31 := false;
+    init := true;
+END_IF;
+  
+(* read the system timer *)
+tx := DINT_TO_DWORD(TIME_TO_DINT(TIME_TCK()));
+  
+(* check for overrun *)
+IF DWORD_TO_DINT(tx) < DWORD_TO_DINT(last_time) THEN
+    (* an overrun has occured, change the value of the highest bit *)
+    bit31 := NOT bit31;
+END_IF;
+
+(* stuff the highest bit into the timer value *)
+at_tx[7] := bit31;
+  
+(* remember the last system time for the next overrun check *)
+last_time := tx;
+  
+
+(* revision history
+DA  14.9.2007 rev 1.0
+  original version
+
+DA  24.2.2008 rev 1.1
+  added self reset on system startup
+
+DA   2.5.2008 rev 1.2
+  corect a problem running under OB35
+
+DA  12.3.2009 rev 1.3
+  corect a problem run on different CPUs
+
+DA  22.12.2009 rev 1.4
+  corect a problem on startup
+*)
+END_FUNCTION_BLOCK
+
+
+DATA_BLOCK IDB_STIME  STIME
+//
+// Instance data block for "STIME"
+//
+BEGIN
+
+END_DATA_BLOCK
